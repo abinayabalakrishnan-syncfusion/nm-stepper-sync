@@ -253,12 +253,26 @@ var Stepper = /** @class */ (function (_super) {
         }
     };
     Stepper.prototype.wireEvents = function () {
-        EventHandler.add(window, 'resize', this.updateResize, this);
-        EventHandler.add(window, 'click', this.updateStepFocus, this);
+        // Store bound global handlers so the exact references can be removed later.
+        // This prevents creating new bound functions on each call which retain
+        // references to the instance and lead to memory leaks.
+        if (!this._globalHandlers) {
+            this._globalHandlers = {};
+        }
+        this._globalHandlers.resize = this.updateResize.bind(this);
+        this._globalHandlers.click = this.updateStepFocus.bind(this);
+        EventHandler.add(window, 'resize', this._globalHandlers.resize);
+        EventHandler.add(window, 'click', this._globalHandlers.click);
     };
     Stepper.prototype.unWireEvents = function () {
-        EventHandler.remove(window, 'resize', this.updateResize);
-        EventHandler.remove(window, 'click', this.updateStepFocus);
+        // Use stored handler references for removal. Clear references after.
+        if (this._globalHandlers) {
+            EventHandler.remove(window, 'resize', this._globalHandlers.resize);
+            EventHandler.remove(window, 'click', this._globalHandlers.click);
+            this._globalHandlers.resize = null;
+            this._globalHandlers.click = null;
+            this._globalHandlers = null;
+        }
     };
     Stepper.prototype.updateResize = function () {
         if (this.stepperItemList && this.progressbar && this.element.classList.contains(HORIZSTEP)) {
@@ -640,16 +654,43 @@ var Stepper = /** @class */ (function (_super) {
         }
     };
     Stepper.prototype.wireItemsEvents = function (itemElement, index) {
-        EventHandler.add(itemElement, 'click', this.linearModeHandler.bind(this, itemElement, index), this);
-        EventHandler.add(itemElement, 'mouseover', this.openStepperTooltip.bind(this, index), this);
-        EventHandler.add(itemElement, 'mouseleave', this.closeStepperTooltip, this);
+        // Create and store bound handlers on the DOM element so we can
+        // remove the exact same references later. Avoids creating new
+        // bound closures on each wire call which can retain the instance.
+        var clickHandler = this.linearModeHandler.bind(this, itemElement, index);
+        var mouseoverHandler = this.openStepperTooltip.bind(this, index);
+        var mouseleaveHandler = this.closeStepperTooltip.bind(this);
+        // Attach handlers to the element (non-enumerable if possible) so they
+        // don't interfere with iteration or serialization.
+        try {
+            Object.defineProperty(itemElement, '_ejHandlers', { value: { click: clickHandler, mouseover: mouseoverHandler, mouseleave: mouseleaveHandler }, configurable: true });
+        }
+        catch (e) {
+            // Fallback if defineProperty fails in older environments
+            itemElement._ejHandlers = { click: clickHandler, mouseover: mouseoverHandler, mouseleave: mouseleaveHandler };
+        }
+        EventHandler.add(itemElement, 'click', clickHandler);
+        EventHandler.add(itemElement, 'mouseover', mouseoverHandler);
+        EventHandler.add(itemElement, 'mouseleave', mouseleaveHandler);
     };
     Stepper.prototype.unWireItemsEvents = function () {
         for (var index = 0; index < this.steps.length; index++) {
             var itemElement = this.stepperItemElements[parseInt(index.toString(), 10)];
-            EventHandler.remove(itemElement, 'click', this.linearModeHandler.bind(this, itemElement, index));
-            EventHandler.remove(itemElement, 'mouseover', this.openStepperTooltip.bind(this, index));
-            EventHandler.remove(itemElement, 'mouseleave', this.closeStepperTooltip);
+            if (itemElement && itemElement._ejHandlers) {
+                EventHandler.remove(itemElement, 'click', itemElement._ejHandlers.click);
+                EventHandler.remove(itemElement, 'mouseover', itemElement._ejHandlers.mouseover);
+                EventHandler.remove(itemElement, 'mouseleave', itemElement._ejHandlers.mouseleave);
+                // Remove references to help GC
+                try {
+                    itemElement._ejHandlers.click = null;
+                    itemElement._ejHandlers.mouseover = null;
+                    itemElement._ejHandlers.mouseleave = null;
+                    delete itemElement._ejHandlers;
+                }
+                catch (e) {
+                    itemElement._ejHandlers = null;
+                }
+            }
         }
     };
     Stepper.prototype.linearModeHandler = function (itemElement, index, e) {
@@ -1018,6 +1059,27 @@ var Stepper = /** @class */ (function (_super) {
         this.stepperItemContainer = null;
         this.textContainer = null;
         this.labelContainer = null;
+        // Ensure any remaining stored handler references are cleared to
+        // avoid accidental retention of the component instance.
+        if (this._globalHandlers) {
+            this._globalHandlers.resize = null;
+            this._globalHandlers.click = null;
+            this._globalHandlers = null;
+        }
+        for (var _i = 0, _a = this.stepperItemElements; _i < _a.length; _i++) {
+            var el = _a[_i];
+            if (el && el._ejHandlers) {
+                try {
+                    el._ejHandlers.click = null;
+                    el._ejHandlers.mouseover = null;
+                    el._ejHandlers.mouseleave = null;
+                    delete el._ejHandlers;
+                }
+                catch (e) {
+                    el._ejHandlers = null;
+                }
+            }
+        }
         this.updateElementClassArray();
         this.element.removeAttribute('aria-label');
         if (this.showTooltip) {
